@@ -42,7 +42,6 @@ const DEFAULT_TASK: TaskItem = {
 export type TimerState = {
     autostart: boolean
     running: boolean
-    // lastTick: number
     mode: Mode
     elapsed: number
     startTime: number | null
@@ -51,6 +50,7 @@ export type TimerState = {
     breakLen: number
     count: number
     duration: number
+    usePomodoro: boolean
 }
 
 export type TimerStore = TimerState & {
@@ -86,13 +86,13 @@ export default class Timer implements Readable<TimerStore> {
             workLen: plugin.getSettings().workLen,
             breakLen: plugin.getSettings().breakLen,
             running: false,
-            // lastTick: 0,
             mode: 'WORK',
             elapsed: 0,
             startTime: null,
             inSession: false,
             duration: plugin.getSettings().workLen,
             count,
+            usePomodoro: plugin.getSettings().usePomodoro,
         }
 
         let store = writable(this.state)
@@ -139,16 +139,16 @@ export default class Timer implements Readable<TimerStore> {
         this.update((s) => {
             if (s.running) {
                 s.elapsed += t
-                if (s.elapsed >= s.count) {
+                if (s.usePomodoro && s.elapsed >= s.count) {
                     s.elapsed = s.count
+                    timeup = true
                 }
-                timeup = s.elapsed >= s.count
             } else {
                 pause = true
             }
             return s
         })
-        if (!pause && timeup) {
+        if (!pause && timeup && this.state.usePomodoro) {
             this.timeup()
         }
     }
@@ -209,14 +209,15 @@ export default class Timer implements Readable<TimerStore> {
     }
 
     private endSession(state: TimerState) {
-        // setup new session
-        if (state.breakLen == 0) {
-            state.mode = 'WORK'
-        } else {
-            state.mode = state.mode == 'WORK' ? 'BREAK' : 'WORK'
+        if (state.usePomodoro) {
+            if (state.breakLen == 0) {
+                state.mode = 'WORK'
+            } else {
+                state.mode = state.mode == 'WORK' ? 'BREAK' : 'WORK'
+            }
+            state.duration = state.mode == 'WORK' ? state.workLen : state.breakLen
+            state.count = state.duration * 60 * 1000
         }
-        state.duration = state.mode == 'WORK' ? state.workLen : state.breakLen
-        state.count = state.duration * 60 * 1000
         state.inSession = false
         state.running = false
         this.clock.postMessage({
@@ -226,6 +227,22 @@ export default class Timer implements Readable<TimerStore> {
         state.startTime = null
         state.elapsed = 0
         return state
+    }
+
+    public stop() {
+        this.update((state) => {
+            state.running = false
+            state.inSession = false
+            this.clock.postMessage({
+                start: false,
+                lowFps: this.plugin.getSettings().lowFps,
+            })
+            if (state.elapsed > 0) {
+                const ctx = this.createLogContext(state)
+                this.processLog(ctx)
+            }
+            return state
+        })
     }
 
     private notify(state: TimerState, logFile: TFile | void) {
@@ -333,10 +350,11 @@ export default class Timer implements Readable<TimerStore> {
 
     public setupTimer() {
         this.update((state) => {
-            const { workLen, breakLen, autostart } = this.plugin.getSettings()
+            const { workLen, breakLen, autostart, usePomodoro } = this.plugin.getSettings()
             state.workLen = workLen
             state.breakLen = breakLen
             state.autostart = autostart
+            state.usePomodoro = usePomodoro
             if (!state.running && !state.inSession) {
                 state.duration =
                     state.mode == 'WORK' ? state.workLen : state.breakLen
